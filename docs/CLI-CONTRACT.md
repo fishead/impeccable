@@ -293,7 +293,7 @@ Optional keys added later by engines (appended after the above): `ignoreValue` (
 #### `cli/engine/node/file-system.mjs`
 
 - `SKIP_DIRS = {'node_modules','dist','build','__pycache__'}`; any directory whose name starts with `.` is skipped **except** `HIDDEN_SOURCE_DIRS = {'.vitepress','.vuepress','.storybook'}`. The root passed to `walkDir` is never name-checked (an explicit hidden dir scans).
-- `SCANNABLE_EXTENSIONS = {'.html','.htm','.css','.scss','.sass','.less','.jsx','.tsx','.js','.ts','.vue','.svelte','.astro','.blade.php'}`; `hasScannableExtension` lowercases and also matches multi-dot exts by `endsWith` (`.blade.php`). CLI directory walks pass configured `detector.extensions` as a second suffix match: `name` lowercased; `name.length > ext.length && name.endsWith(ext)`.
+- `SCANNABLE_EXTENSIONS = {'.html','.htm','.css','.scss','.sass','.less','.jsx','.tsx','.js','.ts','.mjs','.cjs','.vue','.svelte','.astro','.blade.php'}`; `hasScannableExtension` lowercases and also matches multi-dot exts by `endsWith` (`.blade.php`). CLI directory walks pass configured `detector.extensions` as a second suffix match: `name` lowercased; `name.length > ext.length && name.endsWith(ext)`.
 - `walkDir` returns files in `readdirSync` order, recursive, unreadable dirs → `[]`.
 - **There is no generated-file detection in the CLI** (`skill/scripts/lib/is-generated.mjs` is hook-side only and not imported by `cli/`).
 - Import graph: `IMPORT_SPECIFIER_PATTERNS = [/import\s+(?:[\s\S]*?from\s+)?['"]([^'"]+)['"]/g, /@import\s+(?:url\(\s*)?['"]?([^'");\s]+)['"]?\s*\)?/g, /@(?:use|forward)\s+['"]([^'"]+)['"]/g]`; `resolveImport` only for specifiers matching `/^[./]/`: exact, `base+ext` for each scannable ext, then `base/index+ext`.
