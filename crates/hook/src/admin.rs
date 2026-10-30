@@ -37,6 +37,37 @@ const DETECTOR_CONFIG_KEYS: &[&str] = &[
     "advisoryRules",
 ];
 
+/// OpenCode's design hook is a plugin file, not a manifest entry, so it is
+/// outside `HOOK_MANIFEST_TARGETS`: `reset` has to remove the file itself, and
+/// `on` can only report on it (the installer owns writing it).
+/// Kept in sync with `impeccable_skills::hook_manifest` by the marker.
+const OPENCODE_PLUGIN_FILE: &str = "impeccable-design-hook.js";
+const OPENCODE_PLUGIN_MARKER: &str = "impeccable-design-hook";
+
+fn opencode_plugin_path(cwd: &str) -> String {
+    jsp::join(&[cwd, ".opencode", "plugins", OPENCODE_PLUGIN_FILE])
+}
+
+/// The same directory precedence the CLI and `pin` use, so a user install is
+/// found wherever OpenCode was told to read it.
+fn opencode_user_config_dir(rt: &Runtime) -> String {
+    if let Some(v) = rt.env("OPENCODE_CONFIG_DIR").filter(|v| !v.is_empty()) {
+        return v.to_string();
+    }
+    if let Some(v) = rt.env("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
+        return jsp::join(&[v, "opencode"]);
+    }
+    jsp::join(&[&rt.homedir(), ".config", "opencode"])
+}
+
+/// A file at the destination is only ours when it carries the plugin id; a
+/// plugin someone else wrote under the same name is never touched.
+fn is_opencode_plugin(path: &str) -> bool {
+    std::fs::read_to_string(path)
+        .map(|body| body.contains(OPENCODE_PLUGIN_MARKER))
+        .unwrap_or(false)
+}
+
 fn obj(pairs: Vec<(&str, Value)>) -> Value {
     let mut m = Map::new();
     for (k, v) in pairs {
@@ -731,6 +762,21 @@ fn set_enabled(rt: &Runtime, cwd: &str, value: bool) -> Result<String, String> {
             names.join(", ")
         ));
     }
+    // OpenCode is the one provider whose hook is a file the installer writes,
+    // so `on` can report its state but never restore it. Silent unless this
+    // project actually targets OpenCode: a user-scope install alone is another
+    // project's business.
+    if is_opencode_plugin(&opencode_plugin_path(cwd)) {
+        parts.push("OpenCode's design hook is the installed plugin; nothing to repair there.".to_string());
+    } else if exists(&jsp::join(&[cwd, ".opencode", "skills", "impeccable"])) {
+        if is_opencode_plugin(&jsp::join(&[&opencode_user_config_dir(rt), "plugins", OPENCODE_PLUGIN_FILE])) {
+            parts.push("OpenCode's design hook is the user-level plugin; nothing to repair there.".to_string());
+        } else {
+            parts.push(format!(
+                "OpenCode has no hook manifest: re-run `impeccable install` to restore .opencode/plugins/{OPENCODE_PLUGIN_FILE}."
+            ));
+        }
+    }
     Ok(parts.join(" "))
 }
 
@@ -1363,6 +1409,15 @@ fn reset(rt: &Runtime, cwd: &str) -> String {
             pruned.push(target.provider.to_string());
         }
     }
+    // OpenCode keeps its hook in a plugin file, so pruning manifests would
+    // leave it firing after the config that gated it is gone. Remove the
+    // project's copy; a user-scope plugin is global and out of a project
+    // reset's reach, the same rule Claude's `~/.claude/settings.json` follows.
+    let mut removed_plugins: Vec<String> = Vec::new();
+    let plugin = opencode_plugin_path(cwd);
+    if is_opencode_plugin(&plugin) && std::fs::remove_file(&plugin).is_ok() {
+        removed_plugins.push(rel_or(rt, cwd, &plugin));
+    }
     let mut parts: Vec<String> = Vec::new();
     if !removed.is_empty() {
         parts.push(format!(
@@ -1372,6 +1427,12 @@ fn reset(rt: &Runtime, cwd: &str) -> String {
     }
     if !pruned.is_empty() {
         parts.push(format!("Removed hook entries from: {}.", pruned.join(", ")));
+    }
+    if !removed_plugins.is_empty() {
+        parts.push(format!(
+            "Removed the OpenCode design-hook plugin: {}.",
+            removed_plugins.join(", ")
+        ));
     }
     if parts.is_empty() {
         "No hook config or cache to remove. Already at defaults.".to_string()

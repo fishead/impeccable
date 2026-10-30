@@ -453,6 +453,11 @@ fn report_hook_targets(sys: &Sys, io: &mut Io, written: &[String], wanted: &[&'s
     if wanted.contains(&".hermes") && hook_manifest::hermes_plugin_installed(sys) && !hook_manifest::hermes_plugin_enabled(sys) {
         out(io, "Enable the Hermes plugin once: hermes plugins enable impeccable-design-hook (a running gateway reloads it; otherwise restart Hermes).");
     }
+    // OpenCode reads plugins at startup, so a freshly written plugin is not
+    // live until the harness restarts or reloads.
+    if wanted.contains(&".opencode") && written.iter().any(|p| p.ends_with(hook_manifest::OPENCODE_PLUGIN_FILE)) {
+        out(io, "OpenCode loads plugins at startup: restart it, or run /reload, to pick up the design hook.");
+    }
 }
 
 /// JS: decideHookInstall(root, targets, {yes})

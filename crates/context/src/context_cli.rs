@@ -101,6 +101,17 @@ pub fn automatic_hook_mode(ctx: &Ctx, cwd: &str, env: &Env, provider: &Provider)
         let home = crate::hermes::hermes_global_home(env, cwd, &crate::util::homedir(env));
         return if crate::hermes::plugin_enabled(&home) { "stop" } else { "none" };
     }
+    // OpenCode runs the hook from a plugin, not a manifest: the project's
+    // `.opencode/plugins/`, or the global config dir for a user install. It has
+    // no Stop pass, so a plugin supplies per-edit coverage only (#474).
+    if provider.id == "opencode" {
+        const FILE: &str = "impeccable-design-hook.js";
+        const MARKER: &str = "impeccable-design-hook";
+        let ours = |path: &str| std::fs::read_to_string(path).map(|body| body.contains(MARKER)).unwrap_or(false);
+        let project_plugin = jsp::join(&[&active_root, ".opencode", "plugins", FILE]);
+        let user_plugin = jsp::join(&[&crate::pin::opencode_user_config_dir_from(env), "plugins", FILE]);
+        return if ours(&project_plugin) || ours(&user_plugin) { "per-edit" } else { "none" };
+    }
     // Gemini's manifest carries only the session and build-completion hooks,
     // no detector pass, so it never counts as automatic coverage.
     if provider.id == "gemini" {
@@ -1152,6 +1163,43 @@ mod user_scope_hook_tests {
         fixture.put("home/custom/plugins/impeccable-design-hook/__init__.py", "");
         fixture.put("home/custom/config.yaml", HERMES_ENABLED);
         assert_eq!(fixture.mode(), "stop", "HERMES_HOME under home");
+    }
+
+    #[test]
+    fn opencode_plugin_supplies_per_edit_coverage() {
+        const FILE: &str = ".opencode/plugins/impeccable-design-hook.js";
+        let fixture = UserHookFixture::new("opencode");
+        assert_eq!(fixture.mode(), "none", "nothing installed");
+        // Per-edit: OpenCode has no Stop pass, so it never claims "stop".
+        fixture.put(&format!("project/{FILE}"), "const ID = \"impeccable-design-hook\"\n");
+        assert_eq!(fixture.mode(), "per-edit");
+    }
+
+    #[test]
+    fn opencode_user_plugin_supplies_coverage_from_the_global_config_dir() {
+        let mut fixture = UserHookFixture::new("opencode");
+        fixture.put(
+            "home/.config/opencode/plugins/impeccable-design-hook.js",
+            "const ID = \"impeccable-design-hook\"\n",
+        );
+        assert_eq!(fixture.mode(), "per-edit", "user scope, no project install");
+        // `OPENCODE_CONFIG_DIR` moves that file out of reach, and back in.
+        fixture.put("custom/plugins/impeccable-design-hook.js", "const ID = \"impeccable-design-hook\"\n");
+        fixture
+            .env
+            .insert("OPENCODE_CONFIG_DIR".to_string(), fixture.root.join("custom").to_string_lossy().into_owned());
+        assert_eq!(fixture.mode(), "per-edit", "custom config dir");
+        fixture
+            .env
+            .insert("OPENCODE_CONFIG_DIR".to_string(), fixture.root.join("elsewhere").to_string_lossy().into_owned());
+        assert_eq!(fixture.mode(), "none", "no plugin at the configured dir");
+    }
+
+    #[test]
+    fn a_foreign_plugin_file_does_not_count_as_coverage() {
+        let fixture = UserHookFixture::new("opencode");
+        fixture.put("project/.opencode/plugins/impeccable-design-hook.js", "export default {}\n");
+        assert_eq!(fixture.mode(), "none", "the plugin id is the marker");
     }
 
     #[test]

@@ -122,6 +122,53 @@ fn admin_on_and_reset_manage_gemini_without_losing_user_settings() {
 }
 
 #[test]
+fn admin_reset_removes_the_opencode_plugin_and_on_names_the_reinstall() {
+    let t = Tmp::new();
+    let cwd = t.path();
+    // A temp HOME: the user-scope check must not read the developer's own
+    // `~/.config/opencode`, which may hold a real install.
+    let r = rt_with(&cwd, env(&[("HOME", &cwd)]));
+    std::fs::create_dir_all(t.0.join(".opencode/skills/impeccable")).unwrap();
+    t.write(".opencode/plugins/impeccable-design-hook.js", "// impeccable-design-hook\nexport default { id: \"impeccable-design-hook\" }\n");
+    let (out, _, code) = admin_run(&r, &["on"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("OpenCode's design hook is the installed plugin"), "{out}");
+    let (out, _, _) = admin_run(&r, &["reset"]);
+    assert!(
+        out.contains("Removed the OpenCode design-hook plugin: .opencode/plugins/impeccable-design-hook.js."),
+        "{out}"
+    );
+    assert!(!t.exists(".opencode/plugins/impeccable-design-hook.js"));
+    // The installer owns the file, so `on` cannot restore it; it says what can.
+    let (out, _, _) = admin_run(&r, &["on"]);
+    assert!(out.contains("re-run `impeccable install`"), "{out}");
+}
+
+#[test]
+fn admin_on_finds_a_user_scope_opencode_plugin() {
+    let t = Tmp::new();
+    let cwd = t.path();
+    let r = rt_with(&cwd, env(&[("HOME", &cwd)]));
+    std::fs::create_dir_all(t.0.join(".opencode/skills/impeccable")).unwrap();
+    t.write(".config/opencode/plugins/impeccable-design-hook.js", "// impeccable-design-hook\n");
+    let (out, _, _) = admin_run(&r, &["on"]);
+    assert!(out.contains("OpenCode's design hook is the user-level plugin"), "{out}");
+    // A project reset leaves the global copy alone, and `on` still sees it.
+    let (_, _, _) = admin_run(&r, &["reset"]);
+    assert!(t.exists(".config/opencode/plugins/impeccable-design-hook.js"));
+}
+
+#[test]
+fn admin_reset_leaves_a_plugin_someone_else_wrote_alone() {
+    let t = Tmp::new();
+    let r = rt_with(&t.path(), env(&[("HOME", &t.path())]));
+    t.write(".opencode/plugins/impeccable-design-hook.js", "export default { id: \"someone-else\" }\n");
+    let (out, _, _) = admin_run(&r, &["reset"]);
+    assert!(!out.contains("OpenCode"), "{out}");
+    assert!(t.exists(".opencode/plugins/impeccable-design-hook.js"));
+}
+
+#[test]
 fn gemini_after_agent_uses_native_retry_contract_and_session_scope() {
     let t = Tmp::new();
     t.write("index.html", "<main>In progress</main>");

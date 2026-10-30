@@ -295,6 +295,33 @@ describe('hook manifest builders', () => {
       fs.rmSync(distDir, { recursive: true, force: true });
     }
   });
+
+  // OpenCode's extension point is a loaded plugin too, not a manifest: the
+  // bundle ships one file, and the installer places it where OpenCode reads
+  // plugins (`.opencode/plugins/`, or `<global config>/plugins/`).
+  it('emits the OpenCode design-hook plugin verbatim under .opencode/plugins/', () => {
+    assert.equal(PROVIDERS.opencode.emitHooks, undefined);
+    const distDir = fs.mkdtempSync(path.join(os.tmpdir(), 'impeccable-opencode-dist-'));
+    try {
+      createTransformer(PROVIDERS.opencode)(readSourceFiles(REPO_ROOT).skills, distDir);
+      const plugin = path.join(distDir, 'opencode/.opencode/plugins/impeccable-design-hook.js');
+      assert.equal(
+        fs.readFileSync(plugin, 'utf8'),
+        fs.readFileSync(path.join(REPO_ROOT, 'skill/opencode-plugin/impeccable-design-hook.js'), 'utf8'),
+      );
+      const body = fs.readFileSync(plugin, 'utf8');
+      // The installer's presence check looks for the plugin id.
+      assert.match(body, /const ID = "impeccable-design-hook"/);
+      assert.match(body, /execute\.after/, 'v2: hooks the post-edit tool event, not a manifest');
+      assert.match(body, /"tool\.execute\.after"/, 'v1: the same pass under the v1 hook name');
+      assert.match(body, /async server\(input\)/, 'v1 loader entry');
+      assert.match(body, /async setup\(ctx\)/, 'v2 loader entry');
+      assert.match(body, /^export default plugin$/m, 'one default export, no named helpers v1 would call');
+      assert.doesNotMatch(body, /^\s*import[^\n]*@opencode\//m, 'a bare plugin file must not need a package import');
+    } finally {
+      fs.rmSync(distDir, { recursive: true, force: true });
+    }
+  });
 });
 
 // The tracked provider outputs are regenerated on main by the sync workflow

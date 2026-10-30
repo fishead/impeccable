@@ -80,6 +80,50 @@ fn hook_artifacts_for_install(bundle_dir: &str, root: &str, provider: &str, user
     hook_artifacts_for_provider(bundle_dir, root, provider)
 }
 
+/// The OpenCode design hook is a plugin file, not a manifest: OpenCode's
+/// extension point is a loaded plugin, so there is nothing to merge and no
+/// key to own. The file the bundle ships is the whole hook.
+pub const OPENCODE_PLUGIN_FILE: &str = "impeccable-design-hook.js";
+
+/// The marker every install and `doctor` check looks for: the plugin's own id.
+const OPENCODE_PLUGIN_MARKER: &str = "impeccable-design-hook";
+
+/// OpenCode reads plugins from `<project>/.opencode/plugins/` and, at user
+/// scope, from `<global config dir>/plugins/` — not from `<home>/.opencode/`,
+/// which is why this path cannot go through the manifest table (#406).
+fn opencode_plugin_dest(sys: &Sys, root: &str, user_scope: bool) -> String {
+    if user_scope {
+        jsp::join(&[&crate::providers::opencode_global_config_dir(&sys.env, root), "plugins", OPENCODE_PLUGIN_FILE])
+    } else {
+        jsp::join(&[root, ".opencode", "plugins", OPENCODE_PLUGIN_FILE])
+    }
+}
+
+/// Copies the bundled plugin into place, refreshing a stale or partial copy.
+/// Identical bytes are left untouched so a repeat install does not rewrite a
+/// file the harness is watching. Returns the path written, if any.
+fn copy_opencode_plugin(sys: &Sys, bundle_dir: &str, root: &str, user_scope: bool) -> Result<Option<String>, String> {
+    let src = jsp::join(&[bundle_dir, ".opencode", "plugins", OPENCODE_PLUGIN_FILE]);
+    if !util::exists(&src) {
+        return Ok(None);
+    }
+    let body = util::read_bytes(&src)?;
+    let dest = opencode_plugin_dest(sys, root, user_scope);
+    if !util::exists(&dest) || util::read_bytes(&dest)? != body {
+        util::mkdir_p(&jsp::dirname(&dest))?;
+        impeccable_common::fsx::write_atomic(&dest, &body).map_err(|e| util::node_error("open", &dest, &e))?;
+    }
+    Ok(Some(dest))
+}
+
+/// Installed means the plugin file is there and carries our id.
+pub fn opencode_plugin_installed(sys: &Sys, root: &str, user_scope: bool) -> bool {
+    match util::read_bytes(&opencode_plugin_dest(sys, root, user_scope)) {
+        Ok(body) => String::from_utf8_lossy(&body).contains(OPENCODE_PLUGIN_MARKER),
+        Err(_) => false,
+    }
+}
+
 /// JS: expectedHookDests(root, providers)
 pub fn expected_hook_dests(root: &str, providers: &[&str]) -> Vec<String> {
     providers
@@ -398,6 +442,9 @@ pub fn hook_installed_for_provider(sys: &Sys, root: &str, provider: &str) -> boo
     if provider == ".hermes" {
         return hermes_plugin_installed(sys);
     }
+    if provider == ".opencode" {
+        return opencode_plugin_installed(sys, root, false);
+    }
     let artifacts = provider_hook_artifacts(provider);
     if artifacts.is_empty() {
         return true;
@@ -423,6 +470,9 @@ pub fn hook_installed_for_provider(sys: &Sys, root: &str, provider: &str) -> boo
 /// into a project with no Copilot skill of its own, a hook that never fires
 /// (#1098), so a repeat install must rewrite it rather than count it.
 pub fn hook_installed_for_provider_at_scope(sys: &Sys, root: &str, provider: &str, user_scope: bool) -> bool {
+    if provider == ".opencode" {
+        return opencode_plugin_installed(sys, root, user_scope);
+    }
     if user_scope && provider == ".claude" {
         return user_claude_hook_is_current(root);
     }
@@ -640,6 +690,14 @@ pub fn copy_provider_hooks(sys: &crate::providers::Sys, bundle_dir: &str, root: 
             let dest = hermes_plugin_dir(sys);
             if copy_hermes_plugin(sys, bundle_dir)? && !written.contains(&dest) {
                 written.push(dest);
+            }
+            continue;
+        }
+        if *provider == ".opencode" {
+            if let Some(dest) = copy_opencode_plugin(sys, bundle_dir, root, user_scope)? {
+                if !written.contains(&dest) {
+                    written.push(dest);
+                }
             }
             continue;
         }

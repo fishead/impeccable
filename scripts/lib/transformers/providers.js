@@ -116,6 +116,10 @@ export const PROVIDERS = {
     configDir: '.opencode',
     displayName: 'OpenCode',
     frontmatterFields: ['user-invocable', 'argument-hint', 'license', 'compatibility', 'metadata', 'allowed-tools'],
+    // The design hook ships as a JavaScript plugin (skill/opencode-plugin/)
+    // under .opencode/plugins/: OpenCode hooks are in-process plugin callbacks,
+    // not a command-hook manifest.
+    pluginPayload: { source: 'opencode-plugin', dest: 'plugins' },
   },
   pi: {
     provider: 'pi',

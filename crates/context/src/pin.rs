@@ -119,13 +119,19 @@ fn generate_pinned_opencode_command(command: &str, metadata: &serde_json::Value)
 /// JS: pin.mjs#opencodeUserConfigDir. Mirrors the CLI's precedence
 /// (`OPENCODE_CONFIG_DIR` -> `XDG_CONFIG_HOME/opencode` -> `~/.config/opencode`).
 fn opencode_user_config_dir(io: &Io) -> String {
-    if let Some(v) = io.env.get("OPENCODE_CONFIG_DIR").filter(|v| !v.is_empty()) {
+    opencode_user_config_dir_from(&io.env)
+}
+
+/// The same resolution for callers that hold an `Env` rather than an `Io`,
+/// so the CLI's install destination, `pin` and `context` cannot disagree.
+pub(crate) fn opencode_user_config_dir_from(env: &crate::util::Env) -> String {
+    if let Some(v) = env.get("OPENCODE_CONFIG_DIR").filter(|v| !v.is_empty()) {
         return v.clone();
     }
-    if let Some(v) = io.env.get("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
+    if let Some(v) = env.get("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
         return jsp::join(&[v, "opencode"]);
     }
-    jsp::join(&[&crate::util::homedir(&io.env), ".config", "opencode"])
+    jsp::join(&[&crate::util::homedir(env), ".config", "opencode"])
 }
 
 /// JS: pin.mjs#findOpencodeCommandsDirs. The project-local dir when the
