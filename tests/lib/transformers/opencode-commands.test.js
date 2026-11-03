@@ -8,17 +8,26 @@ const config = PROVIDERS.opencode;
 const transform = createTransformer(config);
 
 const TEST_DIR = path.join(process.cwd(), 'test-tmp-opencode-commands');
-const COMMAND_PATH = path.join(
-  TEST_DIR,
-  `${config.provider}/${config.configDir}/commands/impeccable.md`,
-);
+const COMMANDS_DIR = path.join(TEST_DIR, `${config.provider}/${config.configDir}/commands`);
+const COMMAND_PATH = path.join(COMMANDS_DIR, 'impeccable.md');
+const CRITIQUE_PATH = path.join(COMMANDS_DIR, 'impeccable-critique.md');
+
+const CRITIQUE_DESCRIPTION = 'UX design review with heuristic scoring.';
 
 const SAMPLE_SKILL = {
   name: 'impeccable',
   description: 'Use when the user wants to design, redesign, shape, critique, audit, polish, clarify, distill, harden, optimize, adapt, animate, colorize, extract, or otherwise improve a frontend interface.',
   body: '# Impeccable\n\nSkill body here.',
   references: [],
-  scripts: [],
+  scripts: [
+    {
+      name: 'command-metadata.json',
+      content: JSON.stringify({
+        critique: { description: CRITIQUE_DESCRIPTION, argumentHint: '[target]' },
+        polish: { description: 'Final quality pass.', argumentHint: '[target]' },
+      }),
+    },
+  ],
   agents: [],
 };
 
@@ -105,5 +114,35 @@ describe('opencode commands bridge', () => {
     );
     expect(fs.existsSync(skillPath)).toBe(true);
     expect(fs.existsSync(COMMAND_PATH)).toBe(true);
+  });
+
+  test('emits a direct critique shortcut beside the bridge', () => {
+    transform([SAMPLE_SKILL], TEST_DIR);
+    expect(fs.existsSync(CRITIQUE_PATH)).toBe(true);
+    const content = fs.readFileSync(CRITIQUE_PATH, 'utf-8');
+    const body = content.replace(/^---\n[\s\S]*?\n---\n/, '');
+    // The shortcut is the same bridge with the command word in front, so the
+    // skill's own routing turns it into the critique playbook.
+    expect(body).toContain('skill({');
+    expect(body).toContain('name: "impeccable"');
+    expect(body).toContain('`critique`');
+    expect(body).toContain('$ARGUMENTS');
+    expect(content).toMatch(/^agent: build$/m);
+    expect(content).toMatch(/^subtask: true$/m);
+  });
+
+  test('critique shortcut takes its description from command metadata', () => {
+    transform([SAMPLE_SKILL], TEST_DIR);
+    const content = fs.readFileSync(CRITIQUE_PATH, 'utf-8');
+    const fm = content.match(/^---\n([\s\S]*?)\n---/)[1];
+    const line = fm.split('\n').find((l) => l.startsWith('description:'));
+    const value = line.slice('description:'.length).trim().replace(/^"(.*)"$/, '$1');
+    expect(value).toBe(CRITIQUE_DESCRIPTION);
+  });
+
+  test('falls back to a generic description without command metadata', () => {
+    transform([{ ...SAMPLE_SKILL, scripts: [] }], TEST_DIR);
+    expect(fs.existsSync(CRITIQUE_PATH)).toBe(true);
+    expect(fs.readFileSync(CRITIQUE_PATH, 'utf-8')).toContain("Runs Impeccable's critique workflow");
   });
 });

@@ -409,14 +409,38 @@ export function createTransformer(config) {
     if (provider === 'opencode' && skills.length > 0) {
       const commandsDir = path.join(providerDir, `${configDir}/commands`);
       ensureDir(commandsDir);
+      // A shortcut for the workflow users reach for most. `/impeccable` has to
+      // route through the skill body on every run; naming the command in the
+      // body is the same contract the skill's own routing states ("explicit
+      // request to run a command: load its reference and follow it"), so one
+      // extra file turns it into `/impeccable-critique <target>`.
+      const directCommands = (skillName) => (skillName === 'impeccable' ? ['critique'] : []);
       for (const skill of skills) {
-        const bridgeBody = `Call skill({ name: "${skill.name}" }) and follow its \`Setup\` and \`Commands\` sections to handle $ARGUMENTS.\n`;
-        const bridgeFrontmatter = generateYamlFrontmatter({
-          description: skill.description,
-          agent: 'build',
-          subtask: true,
-        });
-        writeFile(path.join(commandsDir, `${skill.name}.md`), `${bridgeFrontmatter}\n${bridgeBody}`.replace(/\n+$/, '\n'));
+        const bridgeBody = (target) =>
+          `Call skill({ name: "${skill.name}" }) and follow its \`Setup\` and \`Commands\` sections to handle ${target}$ARGUMENTS.\n`;
+        const bridgeFrontmatter = (description) =>
+          generateYamlFrontmatter({ description, agent: 'build', subtask: true });
+        writeFile(
+          path.join(commandsDir, `${skill.name}.md`),
+          `${bridgeFrontmatter(skill.description)}\n${bridgeBody('')}`.replace(/\n+$/, '\n'),
+        );
+
+        const commands = directCommands(skill.name);
+        if (commands.length === 0) continue;
+        const metaScript = skill.scripts?.find((s) => s.name === 'command-metadata.json');
+        let metadata = {};
+        try {
+          metadata = metaScript ? JSON.parse(metaScript.content) : {};
+        } catch {
+          metadata = {};
+        }
+        for (const command of commands) {
+          const description = metadata[command]?.description?.trim();
+          writeFile(
+            path.join(commandsDir, `${skill.name}-${command}.md`),
+            `${bridgeFrontmatter(description || `Runs Impeccable's ${command} workflow on $ARGUMENTS.`)}\n${bridgeBody(`\`${command}\` `)}`.replace(/\n+$/, '\n'),
+          );
+        }
       }
     }
 
