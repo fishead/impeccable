@@ -1,6 +1,7 @@
 //! JS: pin.mjs -> `impeccable pin <pin|unpin> <command>`
 
 use crate::jsp;
+use crate::provider::{self, Provider};
 use crate::util::{exists, read_json, safe_read};
 use impeccable_common::Io;
 
@@ -217,6 +218,120 @@ fn load_metadata(io: &Io) -> serde_json::Value {
     serde_json::from_str(COMMAND_METADATA_JSON).unwrap_or(serde_json::Value::Object(Default::default()))
 }
 
+/// Where one pinned shortcut lands.
+#[derive(Clone)]
+enum Target {
+    /// `<skills_dir>/<command>/SKILL.md`, the surface every skill-reading
+    /// harness turns into a slash command (OpenCode is the exception).
+    Skill { skills_dir: String },
+    /// `<commands_dir>/impeccable-<command>.md`, OpenCode's slash surface.
+    Opencode { commands_dir: String },
+}
+
+impl Target {
+    fn key(&self) -> &str {
+        match self {
+            Target::Skill { skills_dir } => skills_dir,
+            Target::Opencode { commands_dir } => commands_dir,
+        }
+    }
+}
+
+/// The install this run is using, when an agent loaded one.
+///
+/// Which skill an agent exposes is the agent's call; the copy it runs is named
+/// by `IMPECCABLE_SKILL_DIR`, which the launcher exports from its own path. A
+/// source checkout has no harness folder (`provider.id == "source"`), so the
+/// caller falls back to scanning the project there.
+fn running_target(provider: &Provider, io: &Io) -> Option<Target> {
+    if provider.id == provider::SOURCE_PROVIDER {
+        return None;
+    }
+    Some(target_for_skill_dir(provider.skill_dir.as_deref()?, io))
+}
+
+/// `<root>/.opencode/skills/impeccable` -> `<root>/.opencode/commands`, and a
+/// user install at `<config>/skills/impeccable` -> `<config>/commands`.
+/// Anything else keeps its skill shortcut: a shared `.agents` copy belongs to
+/// the skill-reading harnesses, and OpenCode's slash surface belongs to an
+/// OpenCode install.
+fn target_for_skill_dir(skill_dir: &str, io: &Io) -> Target {
+    let skills_dir = jsp::dirname(skill_dir);
+    let harness_root = jsp::dirname(&skills_dir);
+    let user_config = opencode_user_config_dir(io);
+    let opencode = jsp::basename(&harness_root) == ".opencode"
+        || jsp::resolve(&harness_root, &[]) == jsp::resolve(&user_config, &[]);
+    if opencode {
+        Target::Opencode { commands_dir: jsp::join(&[&harness_root, "commands"]) }
+    } else {
+        Target::Skill { skills_dir }
+    }
+}
+
+/// Every install the project scan can find, used when no agent copy answers for
+/// this run (a source checkout, or `pin` from a plain shell).
+fn scanned_targets(root: &str, io: &Io, for_cleanup: bool) -> Vec<Target> {
+    let mut targets: Vec<Target> = Vec::new();
+    let push = |target: Target, targets: &mut Vec<Target>| {
+        if !targets.iter().any(|t| t.key() == target.key()) {
+            targets.push(target);
+        }
+    };
+    for skills_dir in find_harness_dirs(root) {
+        // OpenCode's shortcut is the command written below; a
+        // `.opencode/skills/<cmd>/SKILL.md` would be one it never surfaces.
+        if is_opencode_skills_dir(&skills_dir) {
+            continue;
+        }
+        push(Target::Skill { skills_dir }, &mut targets);
+    }
+    for commands_dir in find_opencode_commands_dirs(root, io, for_cleanup) {
+        push(Target::Opencode { commands_dir }, &mut targets);
+    }
+    targets
+}
+
+/// JS: pin.mjs#writePinnedSkill
+fn write_pinned_skill(skills_dir: &str, command: &str, metadata: &serde_json::Value, io: &mut Io) -> bool {
+    let prefix = command_prefix_for(skills_dir);
+    let content = generate_pinned_skill(command, metadata, prefix, prefix == "$");
+    let skill_dir = jsp::join(&[skills_dir, command]);
+    if exists(&skill_dir) {
+        let md = jsp::join(&[&skill_dir, "SKILL.md"]);
+        if exists(&md) {
+            let existing = safe_read(&md).unwrap_or_default();
+            if !existing.contains(PIN_MARKER) {
+                io.out(&format!("  SKIP: {} (non-pinned skill already exists)\n", skill_dir));
+                return false;
+            }
+        }
+    }
+    let _ = std::fs::create_dir_all(&skill_dir);
+    let _ = std::fs::write(jsp::join(&[&skill_dir, "SKILL.md"]), content);
+    io.out(&format!("  + {}\n", skill_dir));
+    true
+}
+
+/// JS: pin.mjs#removePinnedSkill
+fn remove_pinned_skill(skills_dir: &str, command: &str, io: &mut Io) -> bool {
+    let skill_dir = jsp::join(&[skills_dir, command]);
+    if !exists(&skill_dir) {
+        return false;
+    }
+    let md = jsp::join(&[&skill_dir, "SKILL.md"]);
+    if !exists(&md) {
+        return false;
+    }
+    let content = safe_read(&md).unwrap_or_default();
+    if !content.contains(PIN_MARKER) {
+        io.out(&format!("  SKIP: {} (not a pinned skill)\n", skill_dir));
+        return false;
+    }
+    let _ = std::fs::remove_dir_all(&skill_dir);
+    io.out(&format!("  - {}\n", skill_dir));
+    true
+}
+
 pub fn run(args: &[String], io: &mut Io) -> i32 {
     let action = args.first().cloned();
     let command = args.get(1).cloned();
@@ -236,45 +351,27 @@ pub fn run(args: &[String], io: &mut Io) -> i32 {
     }
     let cwd = io.cwd.to_string_lossy().into_owned();
     let root = find_project_root(&cwd);
+    let provider = provider::detect(&io.env, &cwd);
+    let running = running_target(&provider, io);
     if action == "pin" {
         let metadata = load_metadata(io);
-        let harness_dirs = find_harness_dirs(&root);
-        let opencode_commands_dirs = find_opencode_commands_dirs(&root, io, false);
-        if harness_dirs.is_empty() && opencode_commands_dirs.is_empty() {
+        // The running install is the only one the agent asked about; without
+        // one (source checkout), fall back to every install in the project.
+        let targets = match &running {
+            Some(target) => vec![target.clone()],
+            None => scanned_targets(&root, io, false),
+        };
+        if targets.is_empty() {
             io.out("No harness directories with impeccable installed found.\n");
             return 0;
         }
         let mut created = 0;
-        // OpenCode is handled separately below because its shortcut format is
-        // a slash command, not a SKILL.md. Excluding it from the skill loop
-        // prevents a duplicate `.opencode/skills/<cmd>/SKILL.md` that OpenCode
-        // would never surface as `/<cmd>`.
-        for skills_dir in &harness_dirs {
-            if is_opencode_skills_dir(skills_dir) {
-                continue;
-            }
-            let prefix = command_prefix_for(skills_dir);
-            let content = generate_pinned_skill(&command, &metadata, prefix, prefix == "$");
-            let skill_dir = jsp::join(&[skills_dir, &command]);
-            if exists(&skill_dir) {
-                let md = jsp::join(&[&skill_dir, "SKILL.md"]);
-                if exists(&md) {
-                    let existing = safe_read(&md).unwrap_or_default();
-                    if !existing.contains(PIN_MARKER) {
-                        io.out(&format!("  SKIP: {} (non-pinned skill already exists)\n", skill_dir));
-                        continue;
-                    }
-                }
-            }
-            let _ = std::fs::create_dir_all(&skill_dir);
-            let _ = std::fs::write(jsp::join(&[&skill_dir, "SKILL.md"]), content);
-            io.out(&format!("  + {}\n", skill_dir));
-            created += 1;
-        }
-        // OpenCode: a slash command bridge, not a skill shortcut. Covers both
-        // project installs and user-scope (global config) installs.
-        for commands_dir in &opencode_commands_dirs {
-            if write_pinned_opencode_command(commands_dir, &command, &metadata, io) {
+        for target in &targets {
+            let written = match target {
+                Target::Skill { skills_dir } => write_pinned_skill(skills_dir, &command, &metadata, io),
+                Target::Opencode { commands_dir } => write_pinned_opencode_command(commands_dir, &command, &metadata, io),
+            };
+            if written {
                 created += 1;
             }
         }
@@ -283,37 +380,21 @@ pub fn run(args: &[String], io: &mut Io) -> i32 {
             io.out("Use the pinned command directly in each harness.\n");
         }
     } else {
-        let harness_dirs = find_harness_dirs(&root);
-        let mut removed = 0;
-        // OpenCode has its own cleanup path below; skip the skill loop here so
-        // a stray `.opencode/skills/<cmd>/SKILL.md` written by an older
-        // Impeccable version is never silently dropped.
-        for skills_dir in &harness_dirs {
-            if is_opencode_skills_dir(skills_dir) {
-                continue;
+        // Removal stays a sweep: every scope is marker-guarded, so cleanup can
+        // reach a pin whose install has moved or disappeared since it was made.
+        let mut targets = scanned_targets(&root, io, true);
+        if let Some(target) = running {
+            if !targets.iter().any(|t| t.key() == target.key()) {
+                targets.push(target);
             }
-            let skill_dir = jsp::join(&[skills_dir, &command]);
-            if !exists(&skill_dir) {
-                continue;
-            }
-            let md = jsp::join(&[&skill_dir, "SKILL.md"]);
-            if !exists(&md) {
-                continue;
-            }
-            let content = safe_read(&md).unwrap_or_default();
-            if !content.contains(PIN_MARKER) {
-                io.out(&format!("  SKIP: {} (not a pinned skill)\n", skill_dir));
-                continue;
-            }
-            let _ = std::fs::remove_dir_all(&skill_dir);
-            io.out(&format!("  - {}\n", skill_dir));
-            removed += 1;
         }
-        // OpenCode: remove the pinned command file if it is one of ours, in
-        // every scope it could have been written to, even when the skill
-        // itself is gone, since removal is marker-guarded.
-        for commands_dir in find_opencode_commands_dirs(&root, io, true) {
-            if remove_pinned_opencode_command(&commands_dir, &command, io) {
+        let mut removed = 0;
+        for target in &targets {
+            let gone = match target {
+                Target::Skill { skills_dir } => remove_pinned_skill(skills_dir, &command, io),
+                Target::Opencode { commands_dir } => remove_pinned_opencode_command(commands_dir, &command, io),
+            };
+            if gone {
                 removed += 1;
             }
         }
@@ -325,4 +406,159 @@ pub fn run(args: &[String], io: &mut Io) -> i32 {
         }
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::Env;
+
+    fn scratch(tag: &str) -> String {
+        let base = std::env::temp_dir().join(format!("impeccable-pin-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        base.to_string_lossy().into_owned()
+    }
+
+    fn put(path: &str, body: &str) {
+        std::fs::create_dir_all(jsp::dirname(path)).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+
+    fn env(home: &str, extra: &[(&str, &str)]) -> Env {
+        let mut pairs: Vec<(String, String)> = vec![
+            ("HOME".into(), home.into()),
+            ("USERPROFILE".into(), home.into()),
+        ];
+        for (k, v) in extra {
+            pairs.push(((*k).into(), (*v).into()));
+        }
+        Env::from_iter(pairs)
+    }
+
+    fn run_pin(args: &[&str], cwd: &str, env: Env) -> String {
+        let (mut io, cap) = Io::captured("", std::path::PathBuf::from(cwd), env);
+        let argv: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        run(&argv, &mut io);
+        let out = String::from_utf8(cap.stdout.borrow().clone()).unwrap().replace('\\', "/");
+        out
+    }
+
+    #[test]
+    fn a_project_opencode_install_writes_the_slash_command() {
+        let tmp = scratch("oc-project");
+        let project = jsp::join(&[&tmp, "proj"]);
+        std::fs::create_dir_all(jsp::join(&[&project, ".git"])).unwrap();
+        put(&jsp::join(&[&project, ".opencode", "skills", "impeccable", "SKILL.md"]), "---\nname: impeccable\n---\n");
+
+        let out = run_pin(
+            &["pin", "polish"],
+            &project,
+            env(&tmp, &[("IMPECCABLE_SKILL_DIR", &jsp::join(&[&project, ".opencode", "skills", "impeccable"]))]),
+        );
+
+        let command = jsp::join(&[&project, ".opencode", "commands", "impeccable-polish.md"]);
+        assert!(exists(&command), "{out}");
+        assert!(safe_read(&command).unwrap_or_default().contains("<!-- impeccable-pinned-command -->"));
+        assert!(!exists(&jsp::join(&[&project, ".opencode", "skills", "polish"])));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_user_opencode_install_writes_to_the_config_commands_dir() {
+        let tmp = scratch("oc-user");
+        let config = jsp::join(&[&tmp, "oc-config"]);
+        let skill = jsp::join(&[&config, "skills", "impeccable"]);
+        put(&jsp::join(&[&skill, "SKILL.md"]), "---\nname: impeccable\n---\n");
+
+        let out = run_pin(
+            &["pin", "polish"],
+            &tmp,
+            env(
+                &tmp,
+                &[
+                    ("OPENCODE_CONFIG_DIR", &config),
+                    ("IMPECCABLE_SKILL_DIR", &skill),
+                    // The installed launcher cannot name this layout (its harness
+                    // folder is `opencode`, not `.opencode`), so an OpenCode run
+                    // names its provider; without it the scan below still finds
+                    // the config install.
+                    ("IMPECCABLE_PROVIDER_ID", "opencode"),
+                ],
+            ),
+        );
+
+        assert!(exists(&jsp::join(&[&config, "commands", "impeccable-polish.md"])), "{out}");
+        assert!(!exists(&jsp::join(&[&config, "skills", "polish"])));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn the_running_install_is_the_only_one_pinned() {
+        let tmp = scratch("running");
+        let project = jsp::join(&[&tmp, "proj"]);
+        std::fs::create_dir_all(jsp::join(&[&project, ".git"])).unwrap();
+        // The project has a Claude install, but this run belongs to the global
+        // .agents copy the agent actually loaded.
+        put(&jsp::join(&[&project, ".claude", "skills", "impeccable", "SKILL.md"]), "---\nname: impeccable\n---\n");
+        let skill = jsp::join(&[&tmp, ".agents", "skills", "impeccable"]);
+        put(&jsp::join(&[&skill, "SKILL.md"]), "---\nname: impeccable\n---\n");
+
+        let out = run_pin(&["pin", "polish"], &project, env(&tmp, &[("IMPECCABLE_SKILL_DIR", &skill)]));
+
+        assert!(exists(&jsp::join(&[&tmp, ".agents", "skills", "polish", "SKILL.md"])), "{out}");
+        assert!(!exists(&jsp::join(&[&project, ".claude", "skills", "polish"])));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_shared_agents_copy_keeps_the_skill_shortcut() {
+        let tmp = scratch("agents");
+        let skill = jsp::join(&[&tmp, ".agents", "skills", "impeccable"]);
+        let io = {
+            let (io, _cap) = Io::captured("", std::path::PathBuf::from(&tmp), env(&tmp, &[]));
+            io
+        };
+        let target = target_for_skill_dir(&skill, &io);
+        match target {
+            Target::Skill { skills_dir } => assert_eq!(skills_dir, jsp::join(&[&tmp, ".agents", "skills"])),
+            Target::Opencode { .. } => panic!(".agents is a skill surface, not OpenCode's"),
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_source_checkout_falls_back_to_the_project_scan() {
+        let tmp = scratch("source");
+        let project = jsp::join(&[&tmp, "proj"]);
+        std::fs::create_dir_all(jsp::join(&[&project, ".git"])).unwrap();
+        put(&jsp::join(&[&project, ".cursor", "skills", "impeccable", "SKILL.md"]), "---\nname: impeccable\n---\n");
+        // A source checkout's provider id is "source": no harness folder above
+        // the binary, so the running copy cannot name a destination.
+        let source = jsp::join(&[&tmp, "checkout", "skill"]);
+        put(&jsp::join(&[&source, "reference", "ios.md"]), "# ios\n");
+
+        let out = run_pin(&["pin", "polish"], &project, env(&tmp, &[("IMPECCABLE_SKILL_DIR", &source)]));
+
+        assert!(exists(&jsp::join(&[&project, ".cursor", "skills", "polish", "SKILL.md"])), "{out}");
+        assert!(!exists(&jsp::join(&[&tmp, "checkout", "skill", "polish"])));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn unpin_reaches_a_global_running_pin() {
+        let tmp = scratch("unpin");
+        let project = jsp::join(&[&tmp, "proj"]);
+        std::fs::create_dir_all(jsp::join(&[&project, ".git"])).unwrap();
+        let skill = jsp::join(&[&tmp, ".agents", "skills", "impeccable"]);
+        put(&jsp::join(&[&skill, "SKILL.md"]), "---\nname: impeccable\n---\n");
+
+        run_pin(&["pin", "polish"], &project, env(&tmp, &[("IMPECCABLE_SKILL_DIR", &skill)]));
+        let pinned = jsp::join(&[&tmp, ".agents", "skills", "polish", "SKILL.md"]);
+        assert!(exists(&pinned));
+
+        let out = run_pin(&["unpin", "polish"], &project, env(&tmp, &[("IMPECCABLE_SKILL_DIR", &skill)]));
+        assert!(!exists(&pinned), "{out}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
