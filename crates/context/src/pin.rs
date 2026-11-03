@@ -110,7 +110,7 @@ fn generate_pinned_opencode_command(command: &str, metadata: &serde_json::Value)
             format!("Impeccable sub-command shortcut; runs the {command} workflow via /impeccable.")
         });
     format!(
-        "---\ndescription: \"{desc}\"\nagent: build\n---\n\n{marker}\n\nLoad the `impeccable` skill via the skill tool (name: \"impeccable\"), then run `<skill-base-dir>/scripts/impeccable context`, then load `<skill-base-dir>/reference/{command}.md` and follow it. `<skill-base-dir>` is the skill's base directory as reported by the skill tool response; substitute the actual absolute path before running or reading anything.\n\n$ARGUMENTS\n",
+        "---\ndescription: \"{desc}\"\n---\n\n{marker}\n\nLoad the `impeccable` skill via the skill tool (name: \"impeccable\"), then run `<skill-base-dir>/scripts/impeccable context`, then load `<skill-base-dir>/reference/{command}.md` and follow it. `<skill-base-dir>` is the skill's base directory as reported by the skill tool response; substitute the actual absolute path before running or reading anything.\n\n$ARGUMENTS\n",
         desc = desc,
         marker = OPENCODE_PIN_MARKER,
         command = command
@@ -461,10 +461,12 @@ mod tests {
         assert!(exists(&command), "{out}");
         let body = safe_read(&command).unwrap_or_default();
         assert!(body.contains("<!-- impeccable-pinned-command -->"));
-        // Same contract as the bundle's shortcuts: the reply belongs in the
-        // user's session, so no child-session flag.
+        // Only `description` in the frontmatter: the command runs in the user's
+        // session under the agent and permissions they already chose, so no
+        // child-session flag and no agent override.
         assert!(!body.contains("subtask:"));
         assert!(!body.contains("subagent:"));
+        assert!(!body.contains("agent:"));
         assert!(!exists(&jsp::join(&[&project, ".opencode", "skills", "polish"])));
         let _ = std::fs::remove_dir_all(&tmp);
     }

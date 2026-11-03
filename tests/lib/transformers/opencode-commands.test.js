@@ -89,13 +89,13 @@ describe('opencode commands bridge', () => {
     expect(body).toContain('$ARGUMENTS');
   });
 
-  test('command declares agent: build and runs in the current session', () => {
+  test('command sets no agent and runs in the current session', () => {
     transform([SAMPLE_SKILL], TEST_DIR);
     const content = fs.readFileSync(COMMAND_PATH, 'utf-8');
-    expect(content).toMatch(/^agent: build$/m);
-    // No child session: the playbook's report is the reply the user asked for,
-    // so it belongs in their session rather than in a background one whose
-    // result comes back to the parent as a single line.
+    // Only `description`: the command runs under the agent and permission set
+    // the user is already working with. A child session would send the
+    // playbook's report somewhere else and hand the parent one line back.
+    expect(content).not.toMatch(/^agent:/m);
     expect(content).not.toMatch(/^subagent:/m);
     expect(content).not.toMatch(/^subtask:/m);
   });
@@ -149,11 +149,11 @@ describe('opencode commands bridge', () => {
     }
   });
 
-  test('shortcuts keep the current session and the editing agent', () => {
+  test('shortcuts keep the caller\'s agent, permissions and session', () => {
     transform([SAMPLE_SKILL], TEST_DIR);
     for (const command of DIRECT_COMMANDS) {
       const content = fs.readFileSync(shortcutPath(command), 'utf-8');
-      expect(content).toMatch(/^agent: build$/m);
+      expect(content).not.toMatch(/^agent:/m);
       expect(content).not.toMatch(/^subagent:/m);
       expect(content).not.toMatch(/^subtask:/m);
     }

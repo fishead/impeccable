@@ -7347,15 +7347,17 @@ The design hook remembered a finding as `rule:line[:value]`, so a line inserted 
 
 A relative file target given to `surface-brief` is now read from cwd and normalized relative to the project root, so a monorepo caller at the repo root and one inside the workspace name the same brief. The old reading joined the cwd-relative string onto the project root, which stored `apps/a/src/App.tsx` as the primary target of a brief inside `apps/a` and made `impeccable doctor` call it orphaned. Two cases were re-recorded from the binary and reviewed by hand. `surface-brief-read-monorepo-child` finds the `src/App.tsx` brief for `apps/a/src/App.tsx` that it used to miss (exit 0 and the brief on stdout, where it was exit 2 with the candidate list on stderr). `surface-brief-write-monorepo-child` writes `apps/b/.impeccable/surfaces/src-app-tsx.md` with `primary_target: "src/App.tsx"` where it wrote `apps-b-src-app-tsx.md` with `primary_target: "apps/b/src/App.tsx"`. Briefs already written that way still resolve, through `read`, `impeccable context --target` and live alike: when no brief maps the target, one whose stored target is orphaned and is the target with the workspace path in front maps instead (`not-found` becomes `mapping`). `impeccable doctor` still reports them as orphaned until each is rewritten with `surface-brief write` and the old file deleted. A real directory named like the workspace (`apps/web/web/...`) keeps its own briefs out of that match, and a typed path is read from cwd only: `read docs/intro.md` from the root of a repo whose `docs` workspace holds `docs/intro.md` no longer finds that brief. The new case `surface-brief-read-monorepo-legacy` pins it: `read src/App.tsx` from `apps/a` finds an `apps-a-src-app-tsx.md` brief whose `primary_target` is `apps/a/src/App.tsx` (exit 0), where the old reading missed it, and `surface-brief-read-monorepo-prefix-dir` pins the other side: a brief for the real file `apps/a/a/src/App.tsx` is not handed to `src/App.tsx` (exit 2). `surface-brief-write-invalid-target` now passes `.` instead of `../outside.astro`: an external target makes its own directory the project root, so the old argument became a valid write into the directory above the workspace, while `.` stays invalid and its golden is unchanged.
 
-## Recorded 2026-11-03: an OpenCode command runs in the user's session
+## Recorded 2026-11-03: an OpenCode command keeps the caller's agent and session
 
 A command file that sets `subtask: true` — `subagent`, the current name for the
 field — runs in a background child session, so `/impeccable-critique` launched a
 subtask and handed the parent one line instead of the review the user asked for.
-The pinned bridge no longer sets it and the bundle's shortcuts never do
-(`docs/HARNESSES.md`), which leaves only the missing `subtask: true` line
-between the binary and the frozen JS golden. `pin-opencode-user-scope` is the
-case whose file set is unchanged while its content moves; `pin-opencode-project`
-differs the same way and is already an accepted delta above.
+An `agent:` line was worse in a quieter way: it replaced the permission set the
+user was working under. The pinned bridge now writes `description` alone and the
+bundle's shortcuts do the same (`docs/HARNESSES.md`), which leaves two removed
+lines — `agent: build` and `subtask: true` — between the binary and the frozen
+JS golden. `pin-opencode-user-scope` is the case whose file set is unchanged
+while its content moves; `pin-opencode-project` differs the same way and is
+already an accepted delta above.
 
 - `pin-opencode-user-scope`, `pin-opencode-project`.

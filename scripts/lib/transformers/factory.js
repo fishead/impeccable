@@ -400,16 +400,17 @@ export function createTransformer(config) {
 
     // Ship an explicit slash-command surface for OpenCode. OpenCode registers
     // skill commands natively but its TUI autocomplete hides them by deliberate
-    // design (anomalyco/opencode#25439); this file pins the editing agent and
-    // routes through OpenCode's skill tool, which resolves the skill base dir
-    // for any install scope. Menu visibility is the only part contingent on
-    // OpenCode's design; the rest is intentional.
+    // design (anomalyco/opencode#25439); this file routes through OpenCode's
+    // skill tool, which resolves the skill base dir for any install scope. Menu
+    // visibility is the only part contingent on OpenCode's design; the rest is
+    // intentional.
     // Schema restricted to what OpenCode recognises (description, agent, model,
-    // subagent, variant, and the deprecated alias subtask). No subagent flag is
-    // set: a command runs in the current session unless it asks for a child,
-    // and a child is wrong here. The playbook's report is the reply the user
-    // asked for, so it has to appear in their session; a background child
-    // hands the parent one line and the work scrolls past somewhere else.
+    // subagent, variant, and the deprecated alias subtask). Only `description`
+    // is set. A command runs in the user's session under whatever agent and
+    // permissions they chose unless it says otherwise, and both overrides are
+    // wrong here: `subagent`/`subtask` would send the playbook's report to a
+    // background child that hands the parent one line, and an `agent` would
+    // replace the permission set the user is working under.
     if (provider === 'opencode' && skills.length > 0) {
       const commandsDir = path.join(providerDir, `${configDir}/commands`);
       ensureDir(commandsDir);
@@ -425,8 +426,7 @@ export function createTransformer(config) {
       for (const skill of skills) {
         const bridgeBody = (target) =>
           `Call skill({ name: "${skill.name}" }) and follow its \`Setup\` and \`Commands\` sections to handle ${target}$ARGUMENTS.\n`;
-        const bridgeFrontmatter = (description) =>
-          generateYamlFrontmatter({ description, agent: 'build' });
+        const bridgeFrontmatter = (description) => generateYamlFrontmatter({ description });
         writeFile(
           path.join(commandsDir, `${skill.name}.md`),
           `${bridgeFrontmatter(skill.description)}\n${bridgeBody('')}`.replace(/\n+$/, '\n'),
