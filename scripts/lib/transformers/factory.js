@@ -400,26 +400,33 @@ export function createTransformer(config) {
 
     // Ship an explicit slash-command surface for OpenCode. OpenCode registers
     // skill commands natively but its TUI autocomplete hides them by deliberate
-    // design (anomalyco/opencode#25439); this file also pins execution policy
-    // (agent: build, subtask: true) and routes through OpenCode's skill tool,
-    // which resolves the skill base dir for any install scope. Menu visibility
-    // is the only part contingent on OpenCode's design; the rest is intentional.
+    // design (anomalyco/opencode#25439); this file pins the editing agent and
+    // routes through OpenCode's skill tool, which resolves the skill base dir
+    // for any install scope. Menu visibility is the only part contingent on
+    // OpenCode's design; the rest is intentional.
     // Schema restricted to what OpenCode recognises (description, agent, model,
-    // variant, subtask).
+    // subagent, variant, and the deprecated alias subtask). No subagent flag is
+    // set: a command runs in the current session unless it asks for a child,
+    // and a child is wrong here. The playbook's report is the reply the user
+    // asked for, so it has to appear in their session; a background child
+    // hands the parent one line and the work scrolls past somewhere else.
     if (provider === 'opencode' && skills.length > 0) {
       const commandsDir = path.join(providerDir, `${configDir}/commands`);
       ensureDir(commandsDir);
-      // A shortcut for the workflow users reach for most. `/impeccable` has to
+      // Shortcuts for the playbooks users reach for most. `/impeccable` has to
       // route through the skill body on every run; naming the command in the
       // body is the same contract the skill's own routing states ("explicit
       // request to run a command: load its reference and follow it"), so one
-      // extra file turns it into `/impeccable-critique <target>`.
-      const directCommands = (skillName) => (skillName === 'impeccable' ? ['critique'] : []);
+      // extra file turns it into `/impeccable-critique <target>`. The three
+      // here are the ones a stranger picks first: the two evaluations, and the
+      // pass that closes what they found.
+      const directCommands = (skillName) =>
+        skillName === 'impeccable' ? ['critique', 'audit', 'polish'] : [];
       for (const skill of skills) {
         const bridgeBody = (target) =>
           `Call skill({ name: "${skill.name}" }) and follow its \`Setup\` and \`Commands\` sections to handle ${target}$ARGUMENTS.\n`;
         const bridgeFrontmatter = (description) =>
-          generateYamlFrontmatter({ description, agent: 'build', subtask: true });
+          generateYamlFrontmatter({ description, agent: 'build' });
         writeFile(
           path.join(commandsDir, `${skill.name}.md`),
           `${bridgeFrontmatter(skill.description)}\n${bridgeBody('')}`.replace(/\n+$/, '\n'),

@@ -153,7 +153,7 @@ For example: `mkdir -p your-project/.claude/skills && cp -r .claude/skills/impec
 
 Notes:
 - A manual copy skips the design hook and subagents. Run `npx impeccable install` to get them; it writes each tool's hook pointing at the right skill path.
-- OpenCode also needs `.opencode/commands/impeccable.md` (and its `.opencode/commands/impeccable-critique.md` shortcut) copied into your project's `.opencode/commands/` to provide `/impeccable` and `/impeccable-critique`.
+- OpenCode also needs `.opencode/commands/impeccable.md` and its `impeccable-critique.md`, `impeccable-audit.md`, `impeccable-polish.md` shortcuts copied into your project's `.opencode/commands/` to provide `/impeccable` and the three direct commands.
 - Hermes asks you to trust project-local skills once: run `hermes skills trust` from the project root. Global installs need no trust step.
 - Cursor and Gemini CLI may need Agent Skills enabled in settings. See the [Cursor](https://cursor.com/docs/context/skills) and [Gemini CLI](https://geminicli.com/docs/cli/skills/) skills docs.
 - Restart Trae after copying.
