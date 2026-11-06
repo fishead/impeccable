@@ -24,6 +24,9 @@ const PLUGIN = path.join(REPO_ROOT, 'skill/opencode-plugin/impeccable-design-hoo
 
 const FINDINGS = '[impeccable@1] Design hook findings requiring review in a.tsx (1 issue(s)):\n- L5 [gradient-text] Gradient text.';
 const CLEAN = '[impeccable@1] Design hook scanned a.tsx. No deterministic design-quality issues found.';
+const NOTICE = '[impeccable@1] DESIGN.md is newer than .impeccable/design.json. Run /impeccable document to refresh the design-system sidecar.';
+const SUPPRESSED = '[impeccable@1] Suppressing further design hints on a.tsx. More than 6 edits in this session reached. Run /impeccable audit to revisit.';
+const PENDING = '[impeccable@1] Design hook scanned a.tsx. Still has 1 finding(s) flagged earlier this session (gradient-text:5). Handle them before finalizing.';
 // What the edit tool answers with; the plugin must leave it untouched when
 // there is nothing to add.
 const RESULT = 'Edited a.tsx (1 replacement)';
@@ -146,6 +149,45 @@ describe('opencode design-hook plugin', () => {
     const event = v2Event();
     await (await v2Handler(plugin, root))(event);
     assert.equal(event.result.content, RESULT);
+  });
+
+  it('v2: keeps a notice that rides along with a clean scan', async () => {
+    const root = project(`${CLEAN}\n\n${NOTICE}`);
+    const { default: plugin } = await load();
+    const event = v2Event();
+    await (await v2Handler(plugin, root))(event);
+    // The clean section is reassurance, the stale sidecar is an instruction:
+    // dropping both because one phrase matched loses the only part worth acting on.
+    assert.match(event.result.content, /DESIGN\.md is newer/u);
+    assert.doesNotMatch(event.result.content, /No deterministic design-quality issues found/u);
+  });
+
+  it('v2: drops the suppression notice', async () => {
+    const root = project(SUPPRESSED);
+    const { default: plugin } = await load();
+    const event = v2Event();
+    await (await v2Handler(plugin, root))(event);
+    assert.equal(event.result.content, RESULT);
+  });
+
+  it('v2: keeps the reminder about findings still standing', async () => {
+    const root = project(PENDING);
+    const { default: plugin } = await load();
+    const event = v2Event();
+    await (await v2Handler(plugin, root))(event);
+    assert.match(event.result.content, /Still has 1 finding/u);
+  });
+
+  it('v2: scans plain .ts and .js edits the engine covers', async () => {
+    const root = project(FINDINGS);
+    const { default: plugin } = await load();
+    fs.writeFileSync(path.join(root, 'a.ts'), 'export const width = 1\n');
+    const handler = await v2Handler(plugin, root);
+    for (const file of ['a.ts', 'a.js']) {
+      const event = v2Event({ sessionID: `session-${file}`, input: { path: file } });
+      await handler(event);
+      assert.match(event.result.content, /impeccable@1/u, file);
+    }
   });
 
   it('v2: leaves non-UI edits, failed edits and other tools untouched without spawning', async () => {
