@@ -34,10 +34,12 @@ import { homedir } from "node:os"
 const ID = "impeccable-design-hook"
 const EDIT_TOOLS = new Set(["edit", "write", "patch", "multiedit", "apply_patch", "create"])
 // The engine decides whether a file is UI; this list only spares it a process
-// spawn for edits that provably are not markup or stylesheet.
+// spawn for edits that provably are not markup or stylesheet. Plain scripts
+// stay on it because a .js can hold JSX and a .ts a styled string.
 const UI_EXT = new Set([
   ".html", ".htm", ".css", ".scss", ".sass", ".less",
   ".jsx", ".tsx", ".vue", ".svelte", ".astro", ".mdx", ".marko", ".elm",
+  ".js", ".ts",
 ])
 const TIMEOUT_MS = 4000
 const LAUNCHER = process.platform === "win32" ? "impeccable.cmd" : "impeccable"
@@ -94,6 +96,27 @@ function disabled() {
   return DISABLED.has(String(process.env.IMPECCABLE_HOOK_DISABLED ?? "").toLowerCase())
 }
 
+/**
+ * Text the engine emits that spends transcript but asks the agent for nothing.
+ * A clean scan is reassurance, and a suppression notice reports that the engine
+ * has stopped talking about that file. Both must be dropped per section: one
+ * additionalContext can carry a clean scan *and* an unrelated notice, and the
+ * notice is the part worth keeping.
+ */
+const QUIET = [
+  "No deterministic design-quality issues found",
+  "Suppressing further design hints",
+]
+
+/** The actionable part of one additionalContext, or "" when it is all quiet. */
+function actionable(context) {
+  return context
+    .split(/(?=\[impeccable@)/)
+    .filter((section) => section.trim() && !QUIET.some((marker) => section.includes(marker)))
+    .map((section) => section.trim())
+    .join("\n\n")
+}
+
 /** The findings text for one edit, or "" when the engine has nothing to say. */
 function findings(filePath, cwd, sessionID, tool) {
   if (!filePath || !UI_EXT.has(extname(filePath).toLowerCase())) return ""
@@ -122,10 +145,7 @@ function findings(filePath, cwd, sessionID, tool) {
   if (!text) return ""
   const context = JSON.parse(text)?.hookSpecificOutput?.additionalContext
   if (typeof context !== "string" || !context) return ""
-  // A clean scan is reassurance, not a finding. In a harness whose hook output
-  // is a tool result, appending it to every edit spends context on nothing.
-  if (context.includes("No deterministic design-quality issues found")) return ""
-  return context
+  return actionable(context)
 }
 
 function budget(sessionID) {
